@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Голосовой Ассистент (Standalone)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+        #controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            transition: background-color 0.3s, transform 0.1s;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        #startButton {
+            background-color: #5cb85c;
+            color: white;
+        }
+        #startButton.recording {
+            background-color: #d9534f;
+        }
+        #status {
+            margin-top: 20px;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #333;
+            min-height: 25px;
+        }
+        #log {
+            margin-top: 30px;
+            width: 80%;
+            max-width: 600px;
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            text-align: left;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Голосовой Ассистент (Автономный)</h1>
+    <div id="controls">
+        <button id="startButton">Начать голосовой ввод</button>
+        <div id="status">Ожидание...</div>
+    </div>
+    
+    <div id="log">
+        <div class="log-entry"><strong>Лог:</strong></div>
+    </div>
+
+    <script>
+        // *** 1. ВАЖНО: КОНФИГУРАЦИЯ GROQ ***
+        // 🚨 ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ API GROQ
+        const GROQ_API_KEY = "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"; 
+        const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+        const GROQ_MODEL = "llama-3.1-8b-instant";
+        
+        // --- 2. СИСТЕМНЫЙ ПРОМПТ (для Groq) ---
+        const SYSTEM_PROMPT = `
+            Ты — русскоязычный ИИ-ассистент для управления умным домом.
+            Ты должен определить действие пользователя и вернуть его в строгом JSON-формате.
+            Ты НИКОГДА не отвечаешь текстом. ТОЛЬКО генерируешь JSON-объект.
+
+            ДОСТУПНЫЕ ДЕЙСТВИЯ (ACTIONS):
+            1. 'turn_on_light': Включить свет.
+            2. 'turn_off_light': Выключить свет.
+            3. 'set_temp': Установить температуру.
+            4. 'none': Нет явного действия.
+
+            ФОРМАТ JSON:
+            {"action": "<одно из действий>", "target": "<объект: 'кухня', 'спальня', 'термостат', 'none'>", "value": "<значение: '22', 'none'>"}
+        `;
+        // ------------------------------------------
+
+        const startButton = document.getElementById('startButton');
+        const statusDiv = document.getElementById('status');
+        const logDiv = document.getElementById('log');
+
+        let recognition = null;
+        let isRecording = false;
+
+        // Инициализация распознавания речи
+        function initializeRecognition() {
+            if (!('webkitSpeechRecognition' in window)) {
+                statusDiv.textContent = 'Распознавание речи не поддерживается Вашим браузером.';
+                return;
+            }
+
+            // Проверка ключа
+            if (GROQ_API_KEY === "ВАШ_КЛЮЧ_GROQ_API") {
+                statusDiv.textContent = 'ОШИБКА: Пожалуйста, вставьте Ваш Groq API ключ в файл assistant.html!';
+                logMessage('Критическая ошибка: Ключ Groq не установлен.', 'red');
+                return;
+            }
+
+            recognition = new webkitSpeechRecognition();
+            recognition.continuous = false; 
+            recognition.interimResults = false; 
+            recognition.lang = 'ru-RU'; 
+
+            recognition.onstart = function() {
+                isRecording = true;
+                startButton.textContent = 'Говорите... (Нажмите, чтобы остановить)';
+                startButton.classList.add('recording');
+                statusDiv.textContent = 'Слушаю...';
+                logMessage('Запись начата...');
+            };
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                statusDiv.textContent = 'Запрос: ' + transcript;
+                logMessage('Распознано: ' + transcript, 'blue');
+                sendQueryToGroq(transcript); // Прямой вызов Groq
+            };
+
+            recognition.onend = function() {
+                isRecording = false;
+                startButton.textContent = 'Начать голосовой ввод';
+                startButton.classList.remove('recording');
+            };
+
+            recognition.onerror = function(event) {
+                isRecording = false;
+                startButton.textContent = 'Начать голосовой ввод';
+                startButton.classList.remove('recording');
+                if (event.error === 'not-allowed') {
+                    statusDiv.textContent = 'Ошибка: Доступ к микрофону заблокирован. Проверьте настройки браузера.';
+                    logMessage('Ошибка записи: Доступ к микрофону заблокирован.', 'red');
+                } else if (event.error !== 'no-speech') {
+                    statusDiv.textContent = 'Ошибка: ' + event.error;
+                    logMessage('Ошибка записи: ' + event.error, 'red');
+                } else {
+                    statusDiv.textContent = 'Ожидание...';
+                    logMessage('Тишина. Попробуйте еще раз.', 'orange');
+                }
+            };
+        }
+
+        // --- НОВАЯ ЛОГИКА: ПРЯМОЙ ЗАПРОС К GROQ API ---
+        async function sendQueryToGroq(query) {
+            statusDiv.textContent = 'Обработка Groq API...';
+            logMessage('Отправка запроса напрямую в Groq...', 'orange');
+            try {
+                const payload = {
+                    model: GROQ_MODEL,
+                    messages: [
+                        { role: "system", content: SYSTEM_PROMPT },
+                        { role: "user", content: query }
+                    ],
+                    response_format: { type: "json_object" },
+                    temperature: 0.0
+                };
+
+                const response = await fetch(GROQ_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${GROQ_API_KEY}` // АВТОРИЗАЦИЯ
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status} (Проверьте ключ и модель)`);
+                }
+
+                const groqData = await response.json();
+                // Парсинг ответа из JSON-строки, которую вернул Groq
+                const contentStr = groqData.choices[0].message.content;
+                const jsonResponse = JSON.parse(contentStr);
+
+                // --- 3. ОЗВУЧИВАНИЕ ОТВЕТА (TTS) ---
+                const confirmationMessage = generateConfirmation(jsonResponse);
+                speakText(confirmationMessage);
+                
+                statusDiv.textContent = `Готово! Действие: ${jsonResponse.action} (${jsonResponse.target})`;
+                logMessage('Получен JSON: ' + JSON.stringify(jsonResponse, null, 2), 'green');
+
+                handleSmartHomeAction(jsonResponse);
+
+            } catch (error) {
+                statusDiv.textContent = 'Ошибка API: ' + error.message;
+                logMessage('Ошибка при запросе Groq: ' + error.message, 'red');
+            }
+        }
+        // ----------------------------------------------------
+
+        // --- ФУНКЦИИ ОЗВУЧИВАНИЯ ---
+        function speakText(text) {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'ru-RU'; 
+                window.speechSynthesis.speak(utterance);
+            } else {
+                logMessage('Озвучивание (TTS) не поддерживается этим браузером.', 'orange');
+            }
+        }
+
+        function generateConfirmation(jsonAction) {
+            const action = jsonAction.action;
+            const target = jsonAction.target;
+            const value = jsonAction.value;
+
+            switch (action) {
+                case 'turn_on_light':
+                    return `Включаю свет в ${target}.`;
+                case 'turn_off_light':
+                    return `Выключаю свет в ${target}.`;
+                case 'set_temp':
+                    return `Устанавливаю температуру ${value} градусов.`;
+                case 'none':
+                    return `Я не распознала команду для умного дома. Пожалуйста, повторите.`;
+                default:
+                    return 'Команда получена и обработана.';
+            }
+        }
+        // ------------------------------------------
+
+        // Заглушка для обработки команды умного дома
+        function handleSmartHomeAction(action) {
+            const message = `Симулируем команду: ${action.action} ${action.target} на ${action.value}`;
+            console.log(message);
+            // Здесь в реальном проекте Вы бы отправили команду на устройства
+        }
+
+        // Функция логирования
+        function logMessage(message, color = 'black') {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span style="color: ${color};">${message.replace(/\n/g, '<br>')}</span>`;
+            
+            logDiv.insertBefore(entry, logDiv.children[1]);
+            
+            while (logDiv.children.length > 12) {
+                logDiv.removeChild(logDiv.lastChild);
+            }
+        }
+
+        // Обработчик кнопки
+        startButton.addEventListener('click', () => {
+            if (!recognition) {
+                initializeRecognition();
+                if (!recognition) return;
+            }
+
+            if (isRecording) {
+                recognition.stop();
+            } else {
+                recognition.start();
+            }
+        });
+
+        window.onload = initializeRecognition;
+    </script>
+</body>
+</html>
