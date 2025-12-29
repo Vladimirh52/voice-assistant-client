@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Голосовой Ассистент (Standalone)</title>
+    <title>Голосовой Ассистент (Автономный)</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -95,10 +95,15 @@
             1. 'turn_on_light': Включить свет.
             2. 'turn_off_light': Выключить свет.
             3. 'set_temp': Установить температуру.
-            4. 'none': Нет явного действия.
+            4. 'play_media': Воспроизвести медиа (видео/музыка).
+            5. 'none': Нет явного действия.
 
             ФОРМАТ JSON:
-            {"action": "<одно из действий>", "target": "<объект: 'кухня', 'спальня', 'термостат', 'none'>", "value": "<значение: '22', 'none'>"}
+            {"action": "<одно из действий>", "target": "<объект: 'кухня', 'спальня', 'термостат', 'название видео', 'none'>", "value": "<значение: '22', 'youtube', 'none'>"}
+            
+            Пример:
+            Пользователь: Включи на ютубе последний клип Queen.
+            Ответ: {"action": "play_media", "target": "последний клип Queen", "value": "youtube"}
         `;
         // ------------------------------------------
 
@@ -118,7 +123,7 @@
 
             // Проверка ключа
             if (GROQ_API_KEY === "ВАШ_КЛЮЧ_GROQ_API") {
-                statusDiv.textContent = 'ОШИБКА: Пожалуйста, вставьте Ваш Groq API ключ в файл assistant.html!';
+                statusDiv.textContent = 'ОШИБКА: Пожалуйста, вставьте Ваш Groq API ключ в файл index.html!';
                 logMessage('Критическая ошибка: Ключ Groq не установлен.', 'red');
                 return;
             }
@@ -166,7 +171,7 @@
             };
         }
 
-        // --- НОВАЯ ЛОГИКА: ПРЯМОЙ ЗАПРОС К GROQ API ---
+        // --- ЛОГИКА: ПРЯМОЙ ЗАПРОС К GROQ API ---
         async function sendQueryToGroq(query) {
             statusDiv.textContent = 'Обработка Groq API...';
             logMessage('Отправка запроса напрямую в Groq...', 'orange');
@@ -185,7 +190,7 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${GROQ_API_KEY}` // АВТОРИЗАЦИЯ
+                        'Authorization': `Bearer ${GROQ_API_KEY}`
                     },
                     body: JSON.stringify(payload)
                 });
@@ -218,6 +223,9 @@
         // --- ФУНКЦИИ ОЗВУЧИВАНИЯ ---
         function speakText(text) {
             if ('speechSynthesis' in window) {
+                // Прерываем предыдущее озвучивание, если оно есть
+                window.speechSynthesis.cancel(); 
+                
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.lang = 'ru-RU'; 
                 window.speechSynthesis.speak(utterance);
@@ -238,6 +246,11 @@
                     return `Выключаю свет в ${target}.`;
                 case 'set_temp':
                     return `Устанавливаю температуру ${value} градусов.`;
+                case 'play_media':
+                    if (target === 'none') {
+                        return 'Пожалуйста, скажите, что именно нужно включить.';
+                    }
+                    return `Ищу и запускаю ${target}.`;
                 case 'none':
                     return `Я не распознала команду для умного дома. Пожалуйста, повторите.`;
                 default:
@@ -246,12 +259,43 @@
         }
         // ------------------------------------------
 
-        // Заглушка для обработки команды умного дома
+        // --- ЛОГИКА УПРАВЛЕНИЯ УМНЫМ ДОМОМ ---
         function handleSmartHomeAction(action) {
-            const message = `Симулируем команду: ${action.action} ${action.target} на ${action.value}`;
+            const actionType = action.action;
+            const target = action.target;
+            const value = action.value;
+            
+            // 1. Команды СВЕТ / ТЕМПЕРАТУРА
+            if (actionType === 'turn_on_light' || actionType === 'turn_off_light' || actionType === 'set_temp') {
+                const api_endpoint = "URL_ВАШЕГО_API_УМНОГО_ДОМА_ДЛЯ_СВЕТА_ТЕМПЕРАТУРЫ";
+                const command_data = { action: actionType, target: target, value: value };
+                
+                logMessage(`[COMMAND] Отправка ${actionType} для ${target}...`, 'blue');
+                // *** Здесь будет код fetch() для отправки команды вашему хабу (Home Assistant, Majordomo и т.п.)
+                // fetch(api_endpoint, { method: 'POST', body: JSON.stringify(command_data) });
+
+            // 2. Команды МЕДИА (YouTube)
+            } else if (actionType === 'play_media') {
+                const platform = value || 'youtube';
+                const media_title = target;
+                const api_endpoint = "URL_ВАШЕГО_API_УМНОГО_ДОМА_ДЛЯ_МЕДИА"; 
+                
+                const command_data = { media: media_title, platform: platform };
+
+                logMessage(`[MEDIA COMMAND] Отправка: ${media_title} на ${platform}...`, 'purple');
+                // *** Здесь будет fetch() для отправки команды на Smart TV или Chromecast
+                // fetch(api_endpoint, { method: 'POST', body: JSON.stringify(command_data) });
+
+            } else {
+                // Действие 'none'
+                console.log("No smart home action required.");
+            }
+            
+            // ЗАГЛУШКА (удалить после внедрения реальных API)
+            const message = `Симуляция: ${actionType} ${target} на ${value}`;
             console.log(message);
-            // Здесь в реальном проекте Вы бы отправили команду на устройства
         }
+        // ------------------------------------------
 
         // Функция логирования
         function logMessage(message, color = 'black') {
