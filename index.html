@@ -212,7 +212,6 @@
                         'turn_on': 'turn_on_light',
                         // Добавьте сюда любые другие ошибки, которые заметите
                     };
-                    // Нормализуем действие, если оно транслитерировано или содержит опечатку
                     const normalizedAction = actionMap[jsonResponse.action.toLowerCase()] || jsonResponse.action;
                     jsonResponse.action = normalizedAction;
                 }
@@ -309,30 +308,39 @@
             const target = action.target;
             const value = action.value;
             
-            // 1. Команды СВЕТ / ТЕМПЕРАТУРА
+            // 1. Команды СВЕТ / ТЕМПЕРАТУРА (Для будущей интеграции с ESP32+Arduino)
             if (actionType === 'turn_on_light' || actionType === 'turn_off_light' || actionType === 'set_temp') {
                 
-                // ВАШ КОД API УМНОГО ДОМА ДЛЯ СВЕТА И ТЕМПЕРАТУРЫ
-                const LIGHT_API_ENDPOINT = "http://192.168.1.XXX:8123/api/services/light/turn_on"; 
+                // *** МЕСТО ДЛЯ КОДА ESP32/ARDUINO ***
+                const ESP_API_ENDPOINT = "http://192.168.4.1/control"; // Пример локального IP для точки доступа ESP32
+                const command_data = { action: actionType, target: target, value: value };
                 
-                logMessage(`[COMMAND] Отправка ${actionType} для ${target}...`, 'blue');
-                // *** fetch(LIGHT_API_ENDPOINT, { ... }) ***
+                logMessage(`[COMMAND] Подготовка к отправке на ${actionType} для ${target} через ESP32.`, 'blue');
+                
+                // В дальнейшем здесь будет fetch(ESP_API_ENDPOINT, { method: 'POST', body: JSON.stringify(command_data) })
+                // Сейчас это симуляция.
 
-            // 2. Команды МЕДИА (YouTube)
+            // 2. Команды МЕДИА (Запуск YouTube на устройстве, с которого сделан запрос)
             } else if (actionType === 'play_media') {
-                const platform = value || 'youtube';
                 const media_title = target;
                 
-                // ВАШ КОД API УМНОГО ДОМА ДЛЯ МЕДИА
-                const YOUTUBE_API_ENDPOINT = "http://192.168.1.XXX:8123/api/services/media_player/play_media";
-                
-                logMessage(`[MEDIA COMMAND] Отправка: ${media_title} на ${platform}...`, 'purple');
-                // *** fetch(YOUTUBE_API_ENDPOINT, { ... }) ***
+                if (media_title && media_title !== 'none') {
+                    const youtubeUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(media_title)}`;
+
+                    logMessage(`[МЕДИА КОМАНДА] Открытие YouTube: ${youtubeUrl}`, 'purple');
+
+                    // Запускаем новое окно/вкладку с YouTube (работает на iPhone/Android)
+                    window.open(youtubeUrl, '_blank'); 
+                    
+                    statusDiv.textContent = `Запускаю поиск YouTube: ${media_title}`;
+                    
+                } else {
+                    logMessage(`[ОШИБКА МЕДИА] Не указано, что искать.`, 'red');
+                }
 
             } else {
                 // Действие 'none' обработано выше.
-                console.log("No smart home action required.");
-                logMessage(`Действие '${actionType}' обработано как симуляция.`, 'orange');
+                logMessage(`Действие '${actionType}' обработано.`, 'gray');
             }
         }
         // ------------------------------------------
