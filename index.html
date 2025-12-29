@@ -85,25 +85,22 @@
         const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
         const GROQ_MODEL = "llama-3.1-8b-instant";
         
-        // --- 2. СИСТЕМНЫЙ ПРОМПТ (для Groq) ---
+        // --- 2. СИСТЕМНЫЙ ПРОМПТ (для Groq - ТОЛЬКО КОМАНДЫ) ---
         const SYSTEM_PROMPT = `
-            Ты — русскоязычный ИИ-ассистент для управления умным домом.
-            Ты должен определить действие пользователя и вернуть его в строгом JSON-формате.
-            Ты НИКОГДА не отвечаешь текстом. ТОЛЬКО генерируешь JSON-объект.
+            Ты — русскоязычный ИИ-ассистент, чья единственная задача — определить команду для умного дома.
+            Ты должен вернуть СТРОГО JSON-объект. Ты НИКОГДА не отвечаешь текстом.
+            
+            ВСЕ НАЗВАНИЯ ДЕЙСТВИЙ (ACTIONS) ДОЛЖНЫ БЫТЬ ТОЛЬКО НА АНГЛИЙСКОМ.
 
             ДОСТУПНЫЕ ДЕЙСТВИЯ (ACTIONS):
             1. 'turn_on_light': Включить свет.
             2. 'turn_off_light': Выключить свет.
             3. 'set_temp': Установить температуру.
             4. 'play_media': Воспроизвести медиа (видео/музыка).
-            5. 'none': Нет явного действия.
+            5. 'none': Если это не команда для умного дома (например, общий вопрос).
 
             ФОРМАТ JSON:
             {"action": "<одно из действий>", "target": "<объект: 'кухня', 'спальня', 'термостат', 'название видео', 'none'>", "value": "<значение: '22', 'youtube', 'none'>"}
-            
-            Пример:
-            Пользователь: Включи на ютубе последний клип Queen.
-            Ответ: {"action": "play_media", "target": "последний клип Queen", "value": "youtube"}
         `;
         // ------------------------------------------
 
@@ -171,12 +168,14 @@
             };
         }
 
-        // --- ЛОГИКА: ПРЯМОЙ ЗАПРОС К GROQ API ---
+        // --- ЛОГИКА: ДВУХЭТАПНЫЙ ЗАПРОС К GROQ API ---
         async function sendQueryToGroq(query) {
             statusDiv.textContent = 'Обработка Groq API...';
             logMessage('Отправка запроса напрямую в Groq...', 'orange');
+            
+            // --- 1. ПЕРВЫЙ ЗАПРОС: Генерация Команды (JSON) ---
             try {
-                const payload = {
+                const commandPayload = {
                     model: GROQ_MODEL,
                     messages: [
                         { role: "system", content: SYSTEM_PROMPT },
@@ -186,30 +185,78 @@
                     temperature: 0.0
                 };
 
-                const response = await fetch(GROQ_URL, {
+                const commandResponse = await fetch(GROQ_URL, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${GROQ_API_KEY}`
                     },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify(commandPayload)
                 });
 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status} (Проверьте ключ и модель)`);
+                if (!commandResponse.ok) {
+                    throw new Error(`HTTP error! status: ${commandResponse.status}`);
                 }
 
-                const groqData = await response.json();
-                // Парсинг ответа из JSON-строки, которую вернул Groq
-                const contentStr = groqData.choices[0].message.content;
-                const jsonResponse = JSON.parse(contentStr);
+                const groqCommandData = await commandResponse.json();
+                const contentStr = groqCommandData.choices[0].message.content;
+                
+                let jsonResponse = JSON.parse(contentStr);
 
-                // --- 3. ОЗВУЧИВАНИЕ ОТВЕТА (TTS) ---
+                // --- 2. УСИЛЕННАЯ ОБРАБОТКА (ИСПРАВЛЕНИЕ ОШИБОК МОДЕЛИ) ---
+                if (jsonResponse.action) {
+                    const actionMap = {
+                        'плей_медиа': 'play_media',
+                        'плей_мюзик': 'play_media',
+                        'turn_off': 'turn_off_light',
+                        'turn_on': 'turn_on_light',
+                        // Добавьте сюда любые другие ошибки, которые заметите
+                    };
+                    // Нормализуем действие, если оно транслитерировано или содержит опечатку
+                    const normalizedAction = actionMap[jsonResponse.action.toLowerCase()] || jsonResponse.action;
+                    jsonResponse.action = normalizedAction;
+                }
+                
+                logMessage('Полученный JSON (до обработки): ' + JSON.stringify(JSON.parse(contentStr), null, 2), 'yellow');
+                
+                // --- 3. РАБОТА С ДЕЙСТВИЕМ 'none' (ОБЩИЙ ВОПРОС) ---
+                if (jsonResponse.action === 'none') {
+                    // Отправляем второй запрос для получения развернутого текстового ответа
+                    statusDiv.textContent = 'Вопрос не связан с домом. Генерирую ответ...';
+                    
+                    const chatPayload = {
+                        model: GROQ_MODEL,
+                        messages: [{ role: "user", content: query }],
+                        temperature: 0.5 
+                    };
+                    
+                    const chatResponse = await fetch(GROQ_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${GROQ_API_KEY}`
+                        },
+                        body: JSON.stringify(chatPayload)
+                    });
+                    
+                    const chatData = await chatResponse.json();
+                    const textAnswer = chatData.choices[0].message.content.trim();
+
+                    speakText(textAnswer);
+                    statusDiv.textContent = 'Ответ: ' + textAnswer.substring(0, 50) + '...';
+                    logMessage('Получен текстовый ответ: ' + textAnswer, 'gray');
+                    
+                    return; // Завершаем функцию
+                }
+                
+                // --- 4. ОБРАБОТКА КОМАНДЫ УМНОГО ДОМА ---
+
+                // Озвучивание подтверждения
                 const confirmationMessage = generateConfirmation(jsonResponse);
                 speakText(confirmationMessage);
                 
                 statusDiv.textContent = `Готово! Действие: ${jsonResponse.action} (${jsonResponse.target})`;
-                logMessage('Получен JSON: ' + JSON.stringify(jsonResponse, null, 2), 'green');
+                logMessage('Получен JSON (после обработки): ' + JSON.stringify(jsonResponse, null, 2), 'green');
 
                 handleSmartHomeAction(jsonResponse);
 
@@ -223,7 +270,6 @@
         // --- ФУНКЦИИ ОЗВУЧИВАНИЯ ---
         function speakText(text) {
             if ('speechSynthesis' in window) {
-                // Прерываем предыдущее озвучивание, если оно есть
                 window.speechSynthesis.cancel(); 
                 
                 const utterance = new SpeechSynthesisUtterance(text);
@@ -251,10 +297,8 @@
                         return 'Пожалуйста, скажите, что именно нужно включить.';
                     }
                     return `Ищу и запускаю ${target}.`;
-                case 'none':
-                    return `Я не распознала команду для умного дома. Пожалуйста, повторите.`;
                 default:
-                    return 'Команда получена и обработана.';
+                    return `Команда получена и обработана. Неизвестное действие: ${action}.`;
             }
         }
         // ------------------------------------------
@@ -267,33 +311,29 @@
             
             // 1. Команды СВЕТ / ТЕМПЕРАТУРА
             if (actionType === 'turn_on_light' || actionType === 'turn_off_light' || actionType === 'set_temp') {
-                const api_endpoint = "URL_ВАШЕГО_API_УМНОГО_ДОМА_ДЛЯ_СВЕТА_ТЕМПЕРАТУРЫ";
-                const command_data = { action: actionType, target: target, value: value };
+                
+                // ВАШ КОД API УМНОГО ДОМА ДЛЯ СВЕТА И ТЕМПЕРАТУРЫ
+                const LIGHT_API_ENDPOINT = "http://192.168.1.XXX:8123/api/services/light/turn_on"; 
                 
                 logMessage(`[COMMAND] Отправка ${actionType} для ${target}...`, 'blue');
-                // *** Здесь будет код fetch() для отправки команды вашему хабу (Home Assistant, Majordomo и т.п.)
-                // fetch(api_endpoint, { method: 'POST', body: JSON.stringify(command_data) });
+                // *** fetch(LIGHT_API_ENDPOINT, { ... }) ***
 
             // 2. Команды МЕДИА (YouTube)
             } else if (actionType === 'play_media') {
                 const platform = value || 'youtube';
                 const media_title = target;
-                const api_endpoint = "URL_ВАШЕГО_API_УМНОГО_ДОМА_ДЛЯ_МЕДИА"; 
                 
-                const command_data = { media: media_title, platform: platform };
-
+                // ВАШ КОД API УМНОГО ДОМА ДЛЯ МЕДИА
+                const YOUTUBE_API_ENDPOINT = "http://192.168.1.XXX:8123/api/services/media_player/play_media";
+                
                 logMessage(`[MEDIA COMMAND] Отправка: ${media_title} на ${platform}...`, 'purple');
-                // *** Здесь будет fetch() для отправки команды на Smart TV или Chromecast
-                // fetch(api_endpoint, { method: 'POST', body: JSON.stringify(command_data) });
+                // *** fetch(YOUTUBE_API_ENDPOINT, { ... }) ***
 
             } else {
-                // Действие 'none'
+                // Действие 'none' обработано выше.
                 console.log("No smart home action required.");
+                logMessage(`Действие '${actionType}' обработано как симуляция.`, 'orange');
             }
-            
-            // ЗАГЛУШКА (удалить после внедрения реальных API)
-            const message = `Симуляция: ${actionType} ${target} на ${value}`;
-            console.log(message);
         }
         // ------------------------------------------
 
